@@ -1,0 +1,1035 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============ ENUMS ============
+
+enum UserRole {
+  CLIENT
+  FREELANCER
+  ADMIN
+}
+
+enum Availability {
+  AVAILABLE
+  BUSY
+  NOT_AVAILABLE
+}
+
+enum ExperienceLevel {
+  ENTRY
+  INTERMEDIATE
+  EXPERT
+}
+
+enum SellerLevel {
+  NEW
+  LEVEL_1
+  LEVEL_2
+  TOP_RATED
+  PRO
+}
+
+enum CompanySize {
+  INDIVIDUAL
+  SMALL
+  MEDIUM
+  LARGE
+  ENTERPRISE
+}
+
+enum BudgetType {
+  FIXED
+  HOURLY
+}
+
+enum ProjectDuration {
+  LESS_THAN_1_MONTH
+  ONE_TO_3_MONTHS
+  THREE_TO_6_MONTHS
+  MORE_THAN_6_MONTHS
+}
+
+enum ProjectScope {
+  SMALL
+  MEDIUM
+  LARGE
+}
+
+enum FreelancerType {
+  INDEPENDENT
+  AGENCY
+  ANY
+}
+
+enum JobStatus {
+  DRAFT
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum JobVisibility {
+  PUBLIC
+  INVITE_ONLY
+  PRIVATE
+}
+
+enum GigStatus {
+  DRAFT
+  PENDING_APPROVAL
+  ACTIVE
+  PAUSED
+  DENIED
+}
+
+enum ContestStatus {
+  DRAFT
+  OPEN
+  JUDGING
+  COMPLETED
+  CANCELLED
+}
+
+enum ContestEntryStatus {
+  SUBMITTED
+  SHORTLISTED
+  WINNER
+  REJECTED
+}
+
+enum ProposalStatus {
+  PENDING
+  SHORTLISTED
+  INTERVIEW
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+enum ContractType {
+  FIXED
+  HOURLY
+}
+
+enum ContractStatus {
+  PENDING
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+  DISPUTED
+}
+
+enum MilestoneStatus {
+  PENDING
+  FUNDED
+  IN_PROGRESS
+  SUBMITTED
+  REVISION_REQUESTED
+  APPROVED
+  PAID
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  PAYMENT
+  REFUND
+  CONNECT_PURCHASE
+  SUBSCRIPTION
+  FEE
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum NotificationType {
+  NEW_MESSAGE
+  PROPOSAL_RECEIVED
+  PROPOSAL_ACCEPTED
+  PROPOSAL_REJECTED
+  MILESTONE_FUNDED
+  MILESTONE_APPROVED
+  PAYMENT_RECEIVED
+  NEW_REVIEW
+  BADGE_EARNED
+  CONNECTS_LOW
+  CONTRACT_STARTED
+  CONTRACT_ENDED
+  JOB_INVITATION
+  CONTEST_WINNER
+}
+
+enum LanguageProficiency {
+  BASIC
+  CONVERSATIONAL
+  FLUENT
+  NATIVE
+}
+
+// ============ USER & AUTH ============
+
+model User {
+  id                    String    @id @default(cuid())
+  email                 String    @unique
+  password              String?   // Hashed, nullable for OAuth users
+  name                  String
+  avatar                String?
+  role                  UserRole  @default(FREELANCER)
+  emailVerified         DateTime?
+  isActive              Boolean   @default(true)
+  lastSeen              DateTime  @default(now())
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  // Connects System (Upwork style)
+  connects              Int       @default(60)
+  connectsLastRefreshed DateTime  @default(now())
+
+  // Relations
+  freelancerProfile     FreelancerProfile?
+  clientProfile         ClientProfile?
+  accounts              Account[]
+  sessions              Session[]
+  transactions          Transaction[]
+  connectPurchases      ConnectPurchase[]
+  sentMessages          Message[]           @relation("SentMessages")
+  notifications         Notification[]
+  reviewsGiven          Review[]            @relation("ReviewsGiven")
+  reviewsReceived       Review[]            @relation("ReviewsReceived")
+  savedJobs             SavedJob[]
+  savedGigs             SavedGig[]
+
+  @@index([email])
+  @@index([role])
+}
+
+// NextAuth.js Account model
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+// NextAuth.js Session model
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// NextAuth.js Verification Token
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// Password Reset Token
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  email     String
+  token     String   @unique
+  expires   DateTime
+  createdAt DateTime @default(now())
+
+  @@index([email])
+}
+
+// ============ FREELANCER SIDE ============
+
+model FreelancerProfile {
+  id                String          @id @default(cuid())
+  userId            String          @unique
+  username          String          @unique // For public URL: /freelancer/username
+  title             String?         // Professional headline
+  bio               String?         @db.Text
+  hourlyRate        Decimal?        @db.Decimal(10, 2)
+  availability      Availability    @default(AVAILABLE)
+  experienceLevel   ExperienceLevel @default(ENTRY)
+
+  // Seller Levels (Fiverr style)
+  sellerLevel       SellerLevel     @default(NEW)
+  levelPoints       Int             @default(0)
+
+  // Stats
+  totalEarnings     Decimal         @default(0) @db.Decimal(12, 2)
+  completedJobs     Int             @default(0)
+  rating            Decimal         @default(0) @db.Decimal(3, 2)
+  responseTime      Int             @default(0) // Average in hours
+  onTimeDelivery    Decimal         @default(100) @db.Decimal(5, 2) // Percentage
+  repeatClientRate  Decimal         @default(0) @db.Decimal(5, 2) // Percentage
+
+  // Verification
+  identityVerified  Boolean         @default(false)
+  paymentVerified   Boolean         @default(false)
+  phoneVerified     Boolean         @default(false)
+
+  // Location (MUST BE ASIAN COUNTRY - validated at application level)
+  country           String          // Country code, must be Asian country
+  city              String?
+  timezone          String?
+  languages         Json            @default("[]") // Array of {language, proficiency}
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  // Relations
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skills            FreelancerSkill[]
+  portfolioItems    PortfolioItem[]
+  gigs              Gig[]
+  badges            FreelancerBadge[]
+  skillTestAttempts SkillTestAttempt[]
+  proposals         Proposal[]
+  contracts         Contract[]      @relation("FreelancerContracts")
+  contestEntries    ContestEntry[]
+  savedBy           SavedFreelancer[]
+
+  @@index([username])
+  @@index([country])
+  @@index([sellerLevel])
+  @@index([rating])
+  @@index([availability])
+}
+
+model PortfolioItem {
+  id                  String            @id @default(cuid())
+  freelancerProfileId String
+  title               String
+  description         String?           @db.Text
+  images              Json              @default("[]") // Array of URLs
+  projectUrl          String?
+  skills              Json              @default("[]") // Array of skill names
+  completionDate      DateTime?
+  isPublic            Boolean           @default(true)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  freelancerProfile   FreelancerProfile @relation(fields: [freelancerProfileId], references: [id], onDelete: Cascade)
+
+  @@index([freelancerProfileId])
+}
+
+// ============ SKILLS SYSTEM ============
+
+model Skill {
+  id              String            @id @default(cuid())
+  name            String            @unique
+  slug            String            @unique
+  category        String            // e.g., "Web Development", "Design"
+  isPopular       Boolean           @default(false)
+  createdAt       DateTime          @default(now())
+
+  freelancers     FreelancerSkill[]
+  tests           SkillTest[]
+
+  @@index([category])
+  @@index([isPopular])
+}
+
+model FreelancerSkill {
+  id                  String            @id @default(cuid())
+  freelancerProfileId String
+  skillId             String
+  endorsements        Int               @default(0)
+  isVerified          Boolean           @default(false) // Passed test
+  testScore           Int?
+  createdAt           DateTime          @default(now())
+
+  freelancerProfile   FreelancerProfile @relation(fields: [freelancerProfileId], references: [id], onDelete: Cascade)
+  skill               Skill             @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([freelancerProfileId, skillId])
+  @@index([freelancerProfileId])
+  @@index([skillId])
+}
+
+model SkillTest {
+  id            String             @id @default(cuid())
+  skillId       String
+  title         String
+  description   String?            @db.Text
+  questions     Json               // Array of questions
+  passingScore  Int                @default(70)
+  timeLimit     Int                @default(30) // Minutes
+  takenCount    Int                @default(0)
+  isActive      Boolean            @default(true)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  skill         Skill              @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  attempts      SkillTestAttempt[]
+
+  @@index([skillId])
+}
+
+model SkillTestAttempt {
+  id                  String            @id @default(cuid())
+  freelancerProfileId String
+  testId              String
+  score               Int
+  passed              Boolean
+  answers             Json              @default("[]")
+  completedAt         DateTime          @default(now())
+
+  freelancerProfile   FreelancerProfile @relation(fields: [freelancerProfileId], references: [id], onDelete: Cascade)
+  test                SkillTest         @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  @@index([freelancerProfileId])
+  @@index([testId])
+}
+
+// ============ BADGES/ACHIEVEMENTS ============
+
+model Badge {
+  id          String            @id @default(cuid())
+  name        String            @unique // e.g., "Rising Talent", "Top Rated", "Quick Responder"
+  description String?
+  icon        String?
+  criteria    Json              // Criteria for earning the badge
+  isActive    Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+
+  freelancers FreelancerBadge[]
+}
+
+model FreelancerBadge {
+  id                  String            @id @default(cuid())
+  freelancerProfileId String
+  badgeId             String
+  earnedAt            DateTime          @default(now())
+
+  freelancerProfile   FreelancerProfile @relation(fields: [freelancerProfileId], references: [id], onDelete: Cascade)
+  badge               Badge             @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([freelancerProfileId, badgeId])
+  @@index([freelancerProfileId])
+}
+
+// ============ GIGS SYSTEM (Fiverr style) ============
+
+model Gig {
+  id                  String            @id @default(cuid())
+  freelancerProfileId String
+  title               String
+  description         String            @db.Text
+  category            String
+  subcategory         String?
+  tags                Json              @default("[]") // Array of strings
+
+  // 3-Tier Pricing (Fiverr style)
+  basicPrice          Decimal           @db.Decimal(10, 2)
+  basicDescription    String
+  basicDeliveryDays   Int
+  basicRevisions      Int               @default(1)
+
+  standardPrice       Decimal?          @db.Decimal(10, 2)
+  standardDescription String?
+  standardDeliveryDays Int?
+  standardRevisions   Int?
+
+  premiumPrice        Decimal?          @db.Decimal(10, 2)
+  premiumDescription  String?
+  premiumDeliveryDays Int?
+  premiumRevisions    Int?
+
+  // Extras/Add-ons
+  extras              Json              @default("[]") // Array of {title, price, deliveryDays}
+
+  // Media
+  images              Json              @default("[]") // Array of URLs, max 3
+  video               String?
+
+  // Stats
+  impressions         Int               @default(0)
+  clicks              Int               @default(0)
+  orders              Int               @default(0)
+  rating              Decimal           @default(0) @db.Decimal(3, 2)
+  reviewCount         Int               @default(0)
+
+  // Status
+  status              GigStatus         @default(DRAFT)
+  isPro               Boolean           @default(false)
+
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  // Relations
+  freelancerProfile   FreelancerProfile @relation(fields: [freelancerProfileId], references: [id], onDelete: Cascade)
+  faqs                GigFAQ[]
+  contracts           Contract[]
+  savedBy             SavedGig[]
+
+  @@index([freelancerProfileId])
+  @@index([category])
+  @@index([status])
+  @@index([rating])
+}
+
+model GigFAQ {
+  id        String   @id @default(cuid())
+  gigId     String
+  question  String
+  answer    String   @db.Text
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  gig       Gig      @relation(fields: [gigId], references: [id], onDelete: Cascade)
+
+  @@index([gigId])
+}
+
+// ============ CLIENT SIDE ============
+
+model ClientProfile {
+  id              String      @id @default(cuid())
+  userId          String      @unique
+  companyName     String?
+  industry        String?
+  companySize     CompanySize @default(INDIVIDUAL)
+  website         String?
+  description     String?     @db.Text
+
+  // Stats
+  totalSpent      Decimal     @default(0) @db.Decimal(12, 2)
+  jobsPosted      Int         @default(0)
+  hireRate        Decimal     @default(0) @db.Decimal(5, 2) // Percentage
+  avgHourlyPaid   Decimal     @default(0) @db.Decimal(10, 2)
+
+  // Verification
+  paymentVerified Boolean     @default(false)
+  emailVerified   Boolean     @default(false)
+  phoneVerified   Boolean     @default(false)
+
+  // Location (ANY COUNTRY WORLDWIDE)
+  country         String?     // Country code
+  city            String?
+  timezone        String?
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobs            Job[]
+  contests        Contest[]
+  contracts       Contract[]  @relation("ClientContracts")
+  savedFreelancers SavedFreelancer[]
+
+  @@index([userId])
+  @@index([country])
+}
+
+// ============ JOBS SYSTEM (Upwork/Freelancer style) ============
+
+model Job {
+  id                String          @id @default(cuid())
+  clientProfileId   String
+  title             String
+  description       String          @db.Text
+  category          String
+  subcategory       String?
+  skills            Json            @default("[]") // Required skills array
+
+  // Budget
+  budgetType        BudgetType
+  budgetMin         Decimal         @db.Decimal(10, 2)
+  budgetMax         Decimal         @db.Decimal(10, 2)
+
+  // Timeline
+  duration          ProjectDuration?
+  deadline          DateTime?
+
+  // Requirements
+  experienceLevel   ExperienceLevel @default(INTERMEDIATE)
+  projectScope      ProjectScope    @default(MEDIUM)
+
+  // Preferences (filter by Asian countries only)
+  preferredLocations Json           @default("[]") // Array of Asian country codes
+  freelancerType    FreelancerType  @default(ANY)
+
+  // Attachments
+  attachments       Json            @default("[]") // Array of file URLs
+
+  // Stats
+  proposalCount     Int             @default(0)
+  viewCount         Int             @default(0)
+  invitesSent       Int             @default(0)
+
+  // Status
+  status            JobStatus       @default(DRAFT)
+  visibility        JobVisibility   @default(PUBLIC)
+  isUrgent          Boolean         @default(false)
+  isFeatured        Boolean         @default(false)
+
+  // Connects required to apply
+  connectsRequired  Int             @default(4)
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  expiresAt         DateTime?
+
+  // Relations
+  clientProfile     ClientProfile   @relation(fields: [clientProfileId], references: [id], onDelete: Cascade)
+  proposals         Proposal[]
+  contracts         Contract[]
+  savedBy           SavedJob[]
+
+  @@index([clientProfileId])
+  @@index([category])
+  @@index([status])
+  @@index([budgetType])
+  @@index([createdAt])
+}
+
+// ============ CONTESTS SYSTEM (Freelancer style) ============
+
+model Contest {
+  id              String        @id @default(cuid())
+  clientProfileId String
+  title           String
+  description     String        @db.Text
+  category        String
+
+  // Prize
+  prizeAmount     Decimal       @db.Decimal(10, 2)
+  prizeCount      Int           @default(1) // 1st, 2nd, 3rd place etc
+  prizes          Json          @default("[]") // Array of {place, amount}
+
+  // Timeline
+  startDate       DateTime      @default(now())
+  endDate         DateTime
+
+  // Settings
+  isGuaranteed    Boolean       @default(false) // Prize will be awarded
+  isSealed        Boolean       @default(false) // Entries hidden until end
+  isFeatured      Boolean       @default(false)
+
+  // Requirements
+  skills          Json          @default("[]")
+  deliverables    Json          @default("[]") // What to submit
+
+  // Stats
+  entryCount      Int           @default(0)
+  viewCount       Int           @default(0)
+
+  status          ContestStatus @default(DRAFT)
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  clientProfile   ClientProfile @relation(fields: [clientProfileId], references: [id], onDelete: Cascade)
+  entries         ContestEntry[]
+  contracts       Contract[]
+
+  @@index([clientProfileId])
+  @@index([category])
+  @@index([status])
+  @@index([endDate])
+}
+
+model ContestEntry {
+  id                  String              @id @default(cuid())
+  contestId           String
+  freelancerProfileId String
+
+  description         String?             @db.Text
+  files               Json                @default("[]") // Array of URLs
+
+  // Rating by client
+  rating              Int?                // 1-5 stars
+  feedback            String?             @db.Text
+
+  // Result
+  isWinner            Boolean             @default(false)
+  prizePlace          Int?                // 1st, 2nd, 3rd
+
+  status              ContestEntryStatus  @default(SUBMITTED)
+
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Relations
+  contest             Contest             @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  freelancerProfile   FreelancerProfile   @relation(fields: [freelancerProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([contestId, freelancerProfileId])
+  @@index([contestId])
+  @@index([freelancerProfileId])
+}
+
+// ============ PROPOSALS SYSTEM ============
+
+model Proposal {
+  id                  String            @id @default(cuid())
+  jobId               String
+  freelancerProfileId String
+
+  coverLetter         String            @db.Text
+
+  // Bid
+  bidType             BudgetType
+  bidAmount           Decimal           @db.Decimal(10, 2)
+  estimatedDuration   String?
+
+  // Milestones (for fixed price)
+  milestones          Json              @default("[]") // Array of {title, amount, deadline}
+
+  // Attachments
+  attachments         Json              @default("[]")
+
+  // Questions/Answers (if job has screening questions)
+  answers             Json              @default("[]")
+
+  // Stats
+  connectsUsed        Int               @default(4)
+
+  status              ProposalStatus    @default(PENDING)
+
+  clientViewed        Boolean           @default(false)
+  clientViewedAt      DateTime?
+
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  // Relations
+  job                 Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  freelancerProfile   FreelancerProfile @relation(fields: [freelancerProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, freelancerProfileId])
+  @@index([jobId])
+  @@index([freelancerProfileId])
+  @@index([status])
+}
+
+// ============ CONTRACTS & MILESTONES ============
+
+model Contract {
+  id                  String            @id @default(cuid())
+  jobId               String?           // From job
+  gigId               String?           // From gig order
+  contestId           String?           // From contest
+
+  clientProfileId     String
+  freelancerProfileId String
+
+  title               String
+  description         String?           @db.Text
+
+  // Terms
+  contractType        ContractType
+  totalAmount         Decimal           @db.Decimal(12, 2)
+  hourlyRate          Decimal?          @db.Decimal(10, 2) // For hourly
+  weeklyLimit         Int?              // Hours, for hourly
+
+  startDate           DateTime          @default(now())
+  endDate             DateTime?
+
+  status              ContractStatus    @default(PENDING)
+
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  // Relations
+  job                 Job?              @relation(fields: [jobId], references: [id])
+  gig                 Gig?              @relation(fields: [gigId], references: [id])
+  contest             Contest?          @relation(fields: [contestId], references: [id])
+  clientProfile       ClientProfile     @relation("ClientContracts", fields: [clientProfileId], references: [id], onDelete: Cascade)
+  freelancerProfile   FreelancerProfile @relation("FreelancerContracts", fields: [freelancerProfileId], references: [id], onDelete: Cascade)
+  milestones          Milestone[]
+  transactions        Transaction[]
+  reviews             Review[]
+  conversations       Conversation[]
+
+  @@index([jobId])
+  @@index([gigId])
+  @@index([clientProfileId])
+  @@index([freelancerProfileId])
+  @@index([status])
+}
+
+model Milestone {
+  id              String          @id @default(cuid())
+  contractId      String
+
+  title           String
+  description     String?         @db.Text
+  amount          Decimal         @db.Decimal(10, 2)
+  dueDate         DateTime?
+
+  status          MilestoneStatus @default(PENDING)
+
+  // Escrow
+  fundedAt        DateTime?
+  fundedAmount    Decimal?        @db.Decimal(10, 2)
+
+  // Submission
+  submissionNote  String?         @db.Text
+  submissionFiles Json            @default("[]")
+  submittedAt     DateTime?
+
+  // Approval
+  approvedAt      DateTime?
+  paidAt          DateTime?
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  // Relations
+  contract        Contract        @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  transactions    Transaction[]
+
+  @@index([contractId])
+  @@index([status])
+}
+
+// ============ TRANSACTIONS & CONNECTS ============
+
+model Transaction {
+  id              String            @id @default(cuid())
+  userId          String
+
+  type            TransactionType
+  amount          Decimal           @db.Decimal(12, 2)
+  fee             Decimal           @default(0) @db.Decimal(10, 2)
+  netAmount       Decimal           @db.Decimal(12, 2)
+
+  status          TransactionStatus @default(PENDING)
+
+  // References
+  contractId      String?
+  milestoneId     String?
+
+  // Payment details
+  paymentMethod   String?
+  stripePaymentId String?
+
+  description     String?
+
+  createdAt       DateTime          @default(now())
+
+  // Relations
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contract        Contract?         @relation(fields: [contractId], references: [id])
+  milestone       Milestone?        @relation(fields: [milestoneId], references: [id])
+
+  @@index([userId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ConnectPackage {
+  id            String   @id @default(cuid())
+  name          String
+  connects      Int
+  price         Decimal  @db.Decimal(10, 2)
+  bonusConnects Int      @default(0)
+  isPopular     Boolean  @default(false)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  purchases     ConnectPurchase[]
+}
+
+model ConnectPurchase {
+  id             String         @id @default(cuid())
+  userId         String
+  packageId      String
+  connectsBought Int
+  amountPaid     Decimal        @db.Decimal(10, 2)
+  transactionId  String?
+  createdAt      DateTime       @default(now())
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  package        ConnectPackage @relation(fields: [packageId], references: [id])
+
+  @@index([userId])
+}
+
+// ============ REVIEWS ============
+
+model Review {
+  id                    String   @id @default(cuid())
+  contractId            String
+
+  reviewerId            String   // User who wrote the review
+  revieweeId            String   // User who received the review
+
+  // Ratings (1-5)
+  overallRating         Int
+  communicationRating   Int?
+  qualityRating         Int?
+  expertiseRating       Int?
+  professionalismRating Int?
+
+  // For clients reviewing freelancers
+  wouldRecommend        Boolean  @default(true)
+
+  comment               String?  @db.Text
+
+  // Response
+  response              String?  @db.Text // Reviewee can respond
+  responseAt            DateTime?
+
+  isPublic              Boolean  @default(true)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  // Relations
+  contract              Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  reviewer              User     @relation("ReviewsGiven", fields: [reviewerId], references: [id], onDelete: Cascade)
+  reviewee              User     @relation("ReviewsReceived", fields: [revieweeId], references: [id], onDelete: Cascade)
+
+  @@unique([contractId, reviewerId])
+  @@index([reviewerId])
+  @@index([revieweeId])
+  @@index([overallRating])
+}
+
+// ============ MESSAGING ============
+
+model Conversation {
+  id            String    @id @default(cuid())
+  participants  Json      // Array of userIds
+
+  // Context
+  jobId         String?
+  gigId         String?
+  contractId    String?
+
+  lastMessageAt DateTime  @default(now())
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  contract      Contract? @relation(fields: [contractId], references: [id])
+  messages      Message[]
+
+  @@index([contractId])
+  @@index([lastMessageAt])
+}
+
+model Message {
+  id              String       @id @default(cuid())
+  conversationId  String
+  senderId        String
+
+  content         String       @db.Text
+  attachments     Json         @default("[]")
+
+  isRead          Boolean      @default(false)
+  readAt          DateTime?
+
+  createdAt       DateTime     @default(now())
+
+  // Relations
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender          User         @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([senderId])
+  @@index([createdAt])
+}
+
+// ============ NOTIFICATIONS ============
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+
+  type      NotificationType
+  title     String
+  message   String
+  link      String?
+
+  isRead    Boolean          @default(false)
+
+  createdAt DateTime         @default(now())
+
+  // Relations
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+// ============ SAVED/FAVORITES ============
+
+model SavedJob {
+  id        String   @id @default(cuid())
+  userId    String
+  jobId     String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId])
+  @@index([userId])
+}
+
+model SavedFreelancer {
+  id                  String            @id @default(cuid())
+  clientProfileId     String
+  freelancerProfileId String
+  createdAt           DateTime          @default(now())
+
+  clientProfile       ClientProfile     @relation(fields: [clientProfileId], references: [id], onDelete: Cascade)
+  freelancerProfile   FreelancerProfile @relation(fields: [freelancerProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([clientProfileId, freelancerProfileId])
+  @@index([clientProfileId])
+}
+
+model SavedGig {
+  id        String   @id @default(cuid())
+  userId    String
+  gigId     String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gig       Gig      @relation(fields: [gigId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, gigId])
+  @@index([userId])
+}
